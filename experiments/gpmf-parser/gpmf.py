@@ -238,7 +238,7 @@ def parse_gpmf(raw_gpmf):
                 raise
 
         key = gpmf.key()
-        fourcc = key.to_bytes(4, "little").decode()
+        fourcc = key.to_bytes(4, "little").decode("ascii")
         type_ = gpmf.type()
         elements = gpmf.elements_in_struct()
         samples = gpmf.repeat()

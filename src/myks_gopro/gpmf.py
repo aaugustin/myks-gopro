@@ -70,7 +70,7 @@ NP_TYPES = {
 
 
 def convert_string(value: bytes) -> str:
-    return value.rstrip(b"\x00").decode(errors="surrogateescape")
+    return value.rstrip(b"\x00").decode("iso-8859-1", errors="surrogateescape")
 
 
 def convert_uuid(value: bytes) -> uuid.UUID:
@@ -133,8 +133,8 @@ class Record:
 
         """
         fourcc, type_, size, repeat = struct.unpack_from(">4scBH", raw_gpmf, offset)
-        fourcc = fourcc.decode()
-        type_ = "" if type_ == b"\x00" else type_.decode()
+        fourcc = fourcc.decode("ascii")
+        type_ = "" if type_ == b"\x00" else type_.decode("ascii")
         offset += 8
 
         raw_data = memoryview(raw_gpmf)[offset : offset + size * repeat]
