@@ -11,22 +11,27 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
-import itertools
-import pathlib
 import struct
-import sys
 from typing import Self, Sequence, cast
 import uuid
 
 import numpy as np
 
 
-__all__ = ["parse_gpmf", "extract_streams"]
+__all__ = ["parse_gpmf", "Record"]
 
 
 Data = str | int | float | datetime.datetime | uuid.UUID
 
 Metadata = dict[str, Data | tuple[Data, ...]]
+
+
+class ChildNotFound(LookupError):
+    pass
+
+
+class MultipleChildren(LookupError):
+    pass
 
 
 TYPES = {
@@ -98,9 +103,6 @@ CONVERTERS = {
     "Q": convert_q31_32,
     "U": convert_gopro_datetime,
 }
-
-# These FourCC aren't constant metadata.
-VARIABLE_KEYS = {"TSMP", "STMP", "TMPC"}
 
 
 @dataclasses.dataclass
@@ -298,6 +300,17 @@ class Record:
             case _:
                 return self.parse_payload_as_array()
 
+    def get_child(self, fourcc: str) -> Self:
+        children = self.get_children(fourcc)
+        if not children:
+            raise ChildNotFound(f"child {fourcc} not found in {self.fourcc}")
+        if len(children) > 1:
+            raise MultipleChildren(f"multiple {fourcc} children in {self.fourcc}")
+        return children[0]
+
+    def get_children(self, fourcc: str) -> Sequence[Self]:
+        return [child for child in self.children if child.fourcc == fourcc]
+
 
 def parse_gpmf(raw_gpmf: bytes, offset: int = 0) -> Sequence[Record]:
     """Parse a GPMF stream into a list of records."""
@@ -307,88 +320,3 @@ def parse_gpmf(raw_gpmf: bytes, offset: int = 0) -> Sequence[Record]:
         records.append(record)
     assert offset == len(raw_gpmf), "read beyond end of GPMF"
     return records
-
-
-def extract_metadata(records: Sequence[Record]) -> tuple[Metadata, Sequence[Record]]:
-    """Extract shared metadata from a list of records."""
-    shared_children = set.intersection(*(set(record.children) for record in records))
-
-    metadata = {}
-    for fourcc, group_iter in itertools.groupby(
-        shared_children,
-        key=lambda record: record.fourcc,
-    ):
-        if fourcc in VARIABLE_KEYS:
-            continue
-        group = list(group_iter)
-        if len(group) != 1:
-            continue
-        record = group[0]
-        if record.type == "":
-            continue
-        values = record.values()
-        if len(values) != 1:
-            continue
-        value = values[0]
-        metadata[fourcc] = value
-
-    records = [
-        dataclasses.replace(
-            record,
-            children=[ch for ch in record.children if ch.fourcc not in metadata],
-        )
-        for record in records
-    ]
-    return metadata, records
-
-
-def extract_streams(
-    devices: Sequence[Record],
-    verbose: bool = False,
-) -> tuple[Metadata, dict[str, tuple[Metadata, Sequence[Record]]]]:
-    """"""
-    if not all(device.fourcc == "DEVC" for device in devices):
-        raise ValueError("GPMF stream must contain DEVC records at the top level")
-
-    metadata, devices = extract_metadata(devices)
-
-    if not all(ch.fourcc == "STRM" for device in devices for ch in device.children):
-        raise NotImplementedError("GPMF stream contains records from multiple devices")
-
-    streams = [stream for device in devices for stream in device.children]
-
-    def group_key(record: Record) -> str:
-        return "".join(sorted(set(child.fourcc for child in record.children)))
-
-    streams_by_fourcc = {}
-    for _, group_iter in itertools.groupby(
-        sorted(streams, key=group_key),
-        key=group_key,
-    ):
-        group: Sequence[Record] = list(group_iter)
-        stream_metadata, group = extract_metadata(group)
-        keys = set(child.fourcc for stream in group for child in stream.children)
-        keys -= VARIABLE_KEYS
-        if len(keys) != 1:
-            raise ValueError(f"failed to identify unique FourCC for stream: {keys}")
-        streams_by_fourcc[keys.pop()] = stream_metadata, group
-
-    return metadata, streams_by_fourcc
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.stderr.write(f"Usage: {sys.argv[0]} video.gpmf\n")
-        sys.exit(2)
-
-    gpmf = pathlib.Path(sys.argv[1]).read_bytes()
-    records = parse_gpmf(gpmf)
-    track_metadata, streams = extract_streams(records)
-
-    print("Device ID:", track_metadata.get("DVID", "-"))
-    print("Device name:", track_metadata.get("DVNM", "-"))
-    print("Streams:")
-    for fourcc, (stream_metadata, stream_data) in sorted(streams.items()):
-        description = stream_metadata.get("STNM", "-")
-        num_records = sum(record.repeat for record in stream_data)
-        print(f"* {fourcc}: {description} ({num_records} records)")
