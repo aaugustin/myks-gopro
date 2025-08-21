@@ -15,8 +15,10 @@ import itertools
 import pathlib
 import struct
 import sys
-from typing import Self, Sequence
+from typing import Self, Sequence, cast
 import uuid
+
+import numpy as np
 
 
 __all__ = ["parse_gpmf", "extract_streams"]
@@ -44,6 +46,21 @@ TYPES = {
     "s": "h",
     "S": "H",
     "U": "20s",
+}
+
+NP_TYPES = {
+    "b": np.dtype("b"),
+    "B": np.dtype("B"),
+    "d": np.dtype(">f8"),
+    "f": np.dtype(">f4"),
+    "j": np.dtype(">i8"),
+    "J": np.dtype(">u8"),
+    "l": np.dtype(">i4"),
+    "L": np.dtype(">u4"),
+    "q": np.dtype(">i4"),
+    "Q": np.dtype(">i8"),
+    "s": np.dtype(">i2"),
+    "S": np.dtype(">u2"),
 }
 
 
@@ -215,6 +232,71 @@ class Record:
                 return self.parse_complex_payload()
             case _:
                 return self.parse_payload()
+
+    def parse_payload_as_array(self) -> np.typing.NDArray[np.number]:
+        try:
+            dtype = cast(np.dtype[np.number], NP_TYPES[self.type])
+        except KeyError:
+            raise ValueError(f"unsupported type {self.type}")
+
+        array = np.frombuffer(self.raw_data, dtype=dtype)
+
+        if self.type == "q":
+            array = array / 65536.0
+        elif self.type == "Q":
+            array = array / 4294967296.0
+
+        if self.size != dtype.itemsize:
+            array = array.reshape(self.repeat, self.size // dtype.itemsize)
+
+        return array
+
+    def parse_complex_payload_as_array(self) -> np.typing.NDArray[np.number]:
+        if self.struct_type == "":
+            raise ValueError(f"complex type {self.fourcc} requires a TYPE")
+
+        try:
+            dtype = cast(
+                np.dtype[np.number],
+                np.dtype([("", TYPES[type_]) for type_ in self.struct_type]),
+            )
+        except KeyError:
+            raise ValueError(f"unsupported type {self.type}")
+        dtype = dtype.newbyteorder(">")
+
+        array = np.frombuffer(self.raw_data, dtype=dtype)
+
+        types = set(self.struct_type)
+        if types == {"q"}:
+            array = array / 65536.0
+        elif types == {"Q"}:
+            array = array / 4294967296.0
+        elif types & {"q", "Q"}:
+            raise NotImplementedError("complex type with Q notation")
+
+        # Records may be tuples or structs but shouldn't be both.
+        if self.size != dtype.itemsize:
+            raise NotImplementedError("complex type with repetition")
+
+        return array
+
+    def array(self) -> np.typing.NDArray[np.number]:
+        """
+        Return the values from the record as a Numpy array.
+
+        If the record is a simple type, return a list of values when repeat is
+        equal to 1, else a list of tuples.
+
+        If the record is a complex type, always return return a list of tuples.
+
+        """
+        match self.type:
+            case "":
+                raise ValueError(f"{self.fourcc} is a nested record")
+            case "?":
+                return self.parse_complex_payload_as_array()
+            case _:
+                return self.parse_payload_as_array()
 
 
 def parse_gpmf(raw_gpmf: bytes, offset: int = 0) -> Sequence[Record]:
