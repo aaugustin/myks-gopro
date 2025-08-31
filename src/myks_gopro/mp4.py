@@ -7,13 +7,13 @@ Requires ffmpeg and ffprobe.
 
 from __future__ import annotations
 
-from decimal import Decimal
-from fractions import Fraction
 import functools
 import json
 import pathlib
 import subprocess
 import sys
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any, cast
 
 

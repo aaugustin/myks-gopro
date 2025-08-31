@@ -12,8 +12,8 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import struct
-from typing import Self, Sequence, cast
 import uuid
+from typing import Self, Sequence, cast
 
 import numpy as np
 
