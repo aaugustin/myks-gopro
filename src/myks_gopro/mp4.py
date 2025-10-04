@@ -149,10 +149,8 @@ class MP4File:
                 )
             ts += duration
 
-        if (
-            abs(gpmd_meta["duration"] - video_meta["duration"])
-            > float(max(video_meta["time_base"], gpmd_meta["time_base"])) / 2
-        ):
+        max_duration_delta = 1 / float(video_meta["frame_rate"])
+        if abs(gpmd_meta["duration"] - video_meta["duration"]) > max_duration_delta:
             raise ValueError(
                 f"expected video and gpmd durations to be almost equal, "
                 f"got {gpmd_meta['duration']} and {video_meta['duration']}"
