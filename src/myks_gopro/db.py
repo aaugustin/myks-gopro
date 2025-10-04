@@ -31,6 +31,7 @@ class Stream:
 
     @property
     def description(self) -> str:
+        """Description of the stream, from the STNM record, if present."""
         return cast(str, self.metadata.get("STNM", ""))
 
     # Units may be understood by humans but cannot be parsed automatically
@@ -38,6 +39,7 @@ class Stream:
 
     @property
     def units(self) -> str:
+        """Units of the values, from the SIUN or UNIT record, if present."""
         if "SIUN" in self.metadata:
             return cast(str, self.metadata["SIUN"])
         if "UNIT" in self.metadata:
@@ -52,6 +54,14 @@ class Stream:
         | Sequence[Sequence[Data]]
         | Sequence[Sequence[tuple[Data, ...]]]
     ):
+        """
+        Return values for each sample in the stream.
+
+        Depending on the type of the stream, this is a list of values or a list
+        of tuples. When each sample can contain several values, then it's a list
+        of lists of values or a list of lists of tuples.
+
+        """
         values: (
             Sequence[Data]
             | Sequence[tuple[Data, ...]]
@@ -102,6 +112,13 @@ class Stream:
         return values
 
     def values_as_array(self) -> np.typing.NDArray[np.number]:
+        """
+        Return values for each sample in the stream as a NumPy array.
+
+        Depending on the type of the stream, this is a 1D-array, a 2D-array, or
+        a 1D-array of structured data types.
+
+        """
         all_children = [record.get_children(self.fourcc) for record in self.records]
         if not all(len(children) == 1 for children in all_children):
             raise ValueError("multiple values per sample")
@@ -194,7 +211,11 @@ class Database:
         return devc_metadata, strm_records
 
     # These FourCC aren't constant metadata.
-    VARIABLE_KEYS = {"TSMP", "STMP", "TMPC"}
+    VARIABLE_KEYS = {
+        "TSMP",  # number of samples from start of capture to end of record
+        "STMP",  # timestamp of first sample in record in microseconds
+        "TMPC",  # device temperature in degrees Celsius
+    }
 
     @classmethod
     def group_strm(cls, records: Sequence[Record]) -> dict[str, Stream]:
