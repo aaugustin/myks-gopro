@@ -12,6 +12,7 @@ import sys
 from typing import Any, Self, Sequence, cast
 
 import numpy as np
+import scipy
 
 from .gpmf import Data, Record, parse_gpmf
 from .mp4 import MP4File
@@ -45,6 +46,58 @@ class Stream:
         if "UNIT" in self.metadata:
             return cast(str, self.metadata["UNIT"])
         return ""
+
+    def fit_timestamps(self) -> tuple[int, np.number, np.number]:
+        # The total number of samples includes the number of samples in the
+        # current packet, which is known at the time the packet is written,
+        # while the timestamp is for the first sample in the packet and the
+        # timestamp of the next sample isn't known yet.
+        samples = cast(
+            list[int],
+            [record.get_child("TSMP").value() for record in self.records],
+        )
+        total_samples = samples.pop()
+        if not samples:
+            raise ValueError("stream is too short: only one packet")
+        samples = [0] + samples
+        timestamps = cast(
+            list[float],
+            [record.get_child("STMP").value() for record in self.records],
+        )
+        result = scipy.stats.linregress(samples, timestamps)
+        if result.rvalue**2 < 0.999:
+            raise ValueError(
+                f"stream isn't sampled at a constant rate: rvalue = {result.rvalue}"
+            )
+        if result.pvalue > 0.001:
+            raise ValueError(
+                f"stream isn't sampled at a constant rate: pvalue = {result.pvalue}"
+            )
+        # Convert timestamps from microseconds to seconds.
+        return total_samples, result.slope / 1_000_000, result.intercept / 1_000_000
+
+    def timestamps(self) -> Sequence[float]:
+        """
+        Return timestamps for each sample in the stream.
+
+        Raises :exc:`ValueError` if the stream contains only one GPMF packet
+        i.e. is shorter than one second, or isn't sampled at a constant rate.
+
+        """
+        total_samples, slope, intercept = self.fit_timestamps()
+        slope_f, intercept_f = float(slope), float(intercept)
+        return [index * slope_f + intercept_f for index in range(total_samples)]
+
+    def timestamps_as_array(self) -> np.typing.NDArray[np.number]:
+        """
+        Return timestamps for each sample in the stream as a NumPy array.
+
+        Raises :exc:`ValueError` if the stream contains only one GPMF packet
+        i.e. is shorter than one second, or isn't sampled at a constant rate.
+
+        """
+        total_samples, slope, intercept = self.fit_timestamps()
+        return np.arange(total_samples) * slope + intercept
 
     def values(
         self,
