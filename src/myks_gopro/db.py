@@ -187,8 +187,8 @@ class Database:
             raise NotImplementedError("data from multiple devices")
 
         devc_metadata = {
-            "device_id": dvid_records.pop().values()[0],
-            "device_name": dvnm_records.pop().values()[0],
+            "device_id": dvid_records.pop().value(),
+            "device_name": dvnm_records.pop().value(),
         }
 
         return devc_metadata, strm_records

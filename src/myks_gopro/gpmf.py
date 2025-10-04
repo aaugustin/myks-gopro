@@ -146,7 +146,7 @@ class Record:
                 child, sub_offset = cls.parse(raw_gpmf, sub_offset, struct_type)
                 children.append(child)
                 if child.fourcc == "TYPE":
-                    value = child.values()[0]
+                    value = child.value()
                     assert isinstance(value, str)
                     struct_type = value
             assert sub_offset == offset, "read beyond end of record"
@@ -166,6 +166,17 @@ class Record:
             size, repeat = size * repeat, 1
 
         return cls(fourcc, type_, size, repeat, raw_data, children, struct_type), offset
+
+    def value(self) -> Data | tuple[Data, ...]:
+        """
+        Return a single value from the record.
+
+        Raises :exc:`ValueError` if the record contains more than one value.
+        """
+        values = self.values()
+        if len(values) != 1:
+            raise ValueError(f"expected 1 {self.fourcc} value, found {len(values)}")
+        return values[0]
 
     def parse_payload(self) -> Sequence[Data] | Sequence[tuple[Data, ...]]:
         # We need the size of variable length fields to build the format string.
