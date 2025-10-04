@@ -44,35 +44,69 @@ class Stream:
             return cast(str, self.metadata["UNIT"])
         return ""
 
-    def values(self) -> Sequence[Data] | Sequence[tuple[Data, ...]]:
-        values = cast(
-            Sequence[Data] | Sequence[tuple[Data, ...]],
-            [
-                value
-                for record in self.records
-                for value in record.get_child(self.fourcc).values()
-            ],
+    def values(
+        self,
+    ) -> (
+        Sequence[Data]
+        | Sequence[tuple[Data, ...]]
+        | Sequence[Sequence[Data]]
+        | Sequence[Sequence[tuple[Data, ...]]]
+    ):
+        values: (
+            Sequence[Data]
+            | Sequence[tuple[Data, ...]]
+            | Sequence[Sequence[Data]]
+            | Sequence[Sequence[tuple[Data, ...]]]
         )
-        if "SCAL" in self.metadata:
-            scale = self.metadata["SCAL"]
-            if isinstance(scale, tuple):
-                values = [
-                    tuple(v / s for v, s in zip(value, scale))  # type: ignore
-                    for value in values
-                ]
-            elif isinstance(values[0], tuple):
-                values = [
-                    tuple(v / scale for v in value)  # type: ignore
-                    for value in values
-                ]
-            else:
-                values = [value / scale for value in values]
+        all_children = [record.get_children(self.fourcc) for record in self.records]
+        if all(len(children) == 1 for children in all_children):
+            values = [
+                value for children in all_children for value in children[0].values()
+            ]  # type: ignore
+            if "SCAL" in self.metadata:
+                scale = self.metadata["SCAL"]
+                if isinstance(scale, tuple):
+                    values = [
+                        tuple(v / s for v, s in zip(value, scale))  # type: ignore
+                        for value in values
+                    ]
+                elif isinstance(values[0], tuple):
+                    values = [
+                        tuple(v / scale for v in value)  # type: ignore
+                        for value in values
+                    ]
+                else:
+                    values = [value / scale for value in values]
+        else:
+            values = [child.values() for children in all_children for child in children]  # type: ignore
+            if "SCAL" in self.metadata:
+                scale = self.metadata["SCAL"]
+                if isinstance(scale, tuple):
+                    values = [
+                        [tuple(v / s for v, s in zip(value, scale)) for value in sample]  # type: ignore
+                        for sample in values
+                    ]
+                elif isinstance(
+                    next(value for sample in values for value in sample),  # type: ignore
+                    tuple,
+                ):
+                    values = [
+                        [tuple(v / scale for v in value) for value in values]  # type: ignore
+                        for sample in values
+                    ]
+                else:
+                    values = [
+                        [value / scale for value in sample]  # type: ignore
+                        for sample in values
+                    ]
         return values
 
-    def array(self) -> np.typing.NDArray[np.number]:
-        values: np.typing.NDArray[np.number]
-        values = np.concatenate(
-            [record.get_child(self.fourcc).array() for record in self.records]
+    def values_as_array(self) -> np.typing.NDArray[np.number]:
+        all_children = [record.get_children(self.fourcc) for record in self.records]
+        if not all(len(children) == 1 for children in all_children):
+            raise ValueError("multiple values per sample")
+        values: np.typing.NDArray[np.number] = np.concatenate(
+            [children[0].values_as_array() for children in all_children]
         )
         if "SCAL" in self.metadata:
             scale = self.metadata["SCAL"]
@@ -240,8 +274,19 @@ if __name__ == "__main__":
 
     print("Device ID:", db.metadata["device_id"])
     print("Device name:", db.metadata["device_name"])
+    print()
     print("Streams:")
     for fourcc, stream in sorted(db.streams.items()):
         description = f"{stream.description} " if stream.description else ""
-        records = f"[{sum(record.repeat for record in stream.records)} records]"
-        print(f"* {fourcc}: {description}{records}")
+        values = stream.values()
+        total_samples = len(values)
+        print()
+        print(f"{fourcc}: {description}[{total_samples} records]")
+        print()
+        print(" ...")
+        for index in range(total_samples // 10, total_samples // 10 + 3):
+            print(f"{index:>4} ", values[index])
+        print(" ...")
+        for index in range(9 * total_samples // 10, 9 * total_samples // 10 + 3):
+            print(f"{index:>4} ", values[index])
+        print(" ...")

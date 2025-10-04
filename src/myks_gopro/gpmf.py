@@ -282,7 +282,7 @@ class Record:
 
         return array
 
-    def array(self) -> np.typing.NDArray[np.number]:
+    def values_as_array(self) -> np.typing.NDArray[np.number]:
         """
         Return the values from the record as a Numpy array.
 
