@@ -109,13 +109,29 @@ CONVERTERS = {
 
 @dataclasses.dataclass
 class Record:
+    """KLV record."""
+
+    # Key - 7-bit ASCII
     fourcc: str
-    type: str  # \x00 is converted to the empty string.
+
+    # Data type - a single letter for simple types (see TYPES or NP_TYPES), "?"
+    # for complex type (structure defined by a previous TYPE record), or "" for
+    # nested records. (\x00 is converted to "" during parsing for convenience.)
+    type: str
+
+    # Structure size - each sample is limited to 255 bytes or less.
     size: int
+
+    # Repeat - number of samples in the record, up to 65535.
     repeat: int
+
+    # Value - payload of the record, which may be data or nested records.
     raw_data: memoryview
 
+    # Children - nested records - used only when type is "".
     children: Sequence[Self]
+
+    # Structure of a complex record - required when type is "?".
     struct_type: str
 
     def __hash__(self) -> int:
@@ -151,7 +167,8 @@ class Record:
         """
         Parse a record from a GPMF stream, starting at the given offset.
 
-        Payloads are parsed lazily, when calling :meth:`values()`.
+        Payloads are parsed lazily, when calling :meth:`value`, :meth:`values`,
+        or :meth:`values_as_array`.
 
         """
         fourcc, type_, size, repeat = struct.unpack_from(">4scBH", raw_gpmf, offset)
@@ -189,16 +206,18 @@ class Record:
 
         return cls(fourcc, type_, size, repeat, raw_data, children, struct_type), offset
 
-    def value(self) -> Data | tuple[Data, ...]:
-        """
-        Return a single value from the record.
+    def get_children(self, fourcc: str) -> Sequence[Self]:
+        """Get a list of children with the given FourCC."""
+        return [child for child in self.children if child.fourcc == fourcc]
 
-        Raises :exc:`ValueError` if the record contains more than one value.
-        """
-        values = self.values()
-        if len(values) != 1:
-            raise ValueError(f"expected 1 {self.fourcc} value, found {len(values)}")
-        return values[0]
+    def get_child(self, fourcc: str) -> Self:
+        """Get a single child with the given FourCC."""
+        children = self.get_children(fourcc)
+        if not children:
+            raise ChildNotFound(f"child {fourcc} not found in {self.fourcc}")
+        if len(children) > 1:
+            raise MultipleChildren(f"multiple {fourcc} children in {self.fourcc}")
+        return children[0]
 
     def parse_payload(self) -> Sequence[Data] | Sequence[tuple[Data, ...]]:
         # We need the size of variable length fields to build the format string.
@@ -268,6 +287,17 @@ class Record:
             case _:
                 return self.parse_payload()
 
+    def value(self) -> Data | tuple[Data, ...]:
+        """
+        Return a single value from the record.
+
+        Raises :exc:`ValueError` if the record contains more than one value.
+        """
+        values = self.values()
+        if len(values) != 1:
+            raise ValueError(f"expected 1 {self.fourcc} value, found {len(values)}")
+        return values[0]
+
     def parse_payload_as_array(self) -> np.typing.NDArray[np.number]:
         try:
             dtype = cast(np.dtype[np.number], NP_TYPES[self.type])
@@ -332,17 +362,6 @@ class Record:
                 return self.parse_complex_payload_as_array()
             case _:
                 return self.parse_payload_as_array()
-
-    def get_child(self, fourcc: str) -> Self:
-        children = self.get_children(fourcc)
-        if not children:
-            raise ChildNotFound(f"child {fourcc} not found in {self.fourcc}")
-        if len(children) > 1:
-            raise MultipleChildren(f"multiple {fourcc} children in {self.fourcc}")
-        return children[0]
-
-    def get_children(self, fourcc: str) -> Sequence[Self]:
-        return [child for child in self.children if child.fourcc == fourcc]
 
 
 def parse_gpmf(raw_gpmf: bytes, offset: int = 0) -> Sequence[Record]:
