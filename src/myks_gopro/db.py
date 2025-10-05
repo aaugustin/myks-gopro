@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import math
 import pathlib
 import sys
 from typing import Any, Self, Sequence, cast
@@ -29,6 +30,13 @@ class Stream:
         self.fourcc = fourcc
         self.records = records
         self.metadata = metadata
+        # Initialisation requires:
+        # * self.fit_timestamps() to set self.num_samples;
+        # * self.set_timings() to set self.sample_duration,
+        #   self.start_timestamp, and self.total_duration.
+        # It is performed in Database.set_timings() which sets timings relative
+        # to the SHUT stream in order to be synchronized with the video stream.
+        # Alternatively, self.set_timings(*self.fit_timestamps()) does the job.
 
     @property
     def description(self) -> str:
@@ -47,7 +55,7 @@ class Stream:
             return cast(str, self.metadata["UNIT"])
         return ""
 
-    def fit_timestamps(self) -> tuple[int, np.number, np.number]:
+    def fit_timestamps(self) -> tuple[float, float]:
         # The total number of samples includes the number of samples in the
         # current packet, which is known at the time the packet is written,
         # while the timestamp is for the first sample in the packet and the
@@ -56,7 +64,7 @@ class Stream:
             list[int],
             [record.get_child("TSMP").value() for record in self.records],
         )
-        total_samples = samples.pop()
+        self.num_samples = samples.pop()
         if not samples:
             raise ValueError("stream is too short: only one packet")
         samples = [0] + samples
@@ -73,8 +81,16 @@ class Stream:
             raise ValueError(
                 f"stream isn't sampled at a constant rate: pvalue = {result.pvalue}"
             )
-        # Convert timestamps from microseconds to seconds.
-        return total_samples, result.slope / 1_000_000, result.intercept / 1_000_000
+        return (
+            float(result.slope) / 1_000_000,  # sample duration in seconds
+            float(result.intercept) / 1_000_000,  # start timestamp in seconds
+        )
+
+    def set_timings(self, sample_duration: float, start_timestamp: float) -> None:
+        """Set timing information for the stream."""
+        self.sample_duration = sample_duration
+        self.start_timestamp = start_timestamp
+        self.total_duration = self.num_samples * sample_duration
 
     def timestamps(self) -> Sequence[float]:
         """
@@ -84,9 +100,10 @@ class Stream:
         i.e. is shorter than one second, or isn't sampled at a constant rate.
 
         """
-        total_samples, slope, intercept = self.fit_timestamps()
-        slope_f, intercept_f = float(slope), float(intercept)
-        return [index * slope_f + intercept_f for index in range(total_samples)]
+        return [
+            index * self.sample_duration + self.start_timestamp
+            for index in range(self.num_samples)
+        ]
 
     def timestamps_as_array(self) -> np.typing.NDArray[np.number]:
         """
@@ -96,8 +113,7 @@ class Stream:
         i.e. is shorter than one second, or isn't sampled at a constant rate.
 
         """
-        total_samples, slope, intercept = self.fit_timestamps()
-        return np.arange(total_samples) * slope + intercept
+        return np.arange(self.num_samples) * self.sample_duration + self.start_timestamp
 
     def values(
         self,
@@ -219,6 +235,7 @@ class Database:
         nb_packets = mp4_file.gpmd_metadata["nb_frames"]
         devc_metadata, strm_records = cls.extract_strm(gpmf, nb_packets)
         streams = cls.group_strm(strm_records)
+        cls.set_timings(streams, video_metadata)
 
         return cls(streams, {**video_metadata, **devc_metadata})
 
@@ -350,6 +367,36 @@ class Database:
         ]
         return metadata, records
 
+    @classmethod
+    def set_timings(
+        cls, streams: dict[str, Stream], video_metadata: dict[str, Any]
+    ) -> None:
+        """Set timing information for each stream."""
+        for stream in streams.values():
+            if stream.fourcc == "LOGS":
+                continue
+            sample_duration, start_timestamp = stream.fit_timestamps()
+            # Tolerate data streams finishing within +/- 0.5 second
+            if not math.isclose(
+                stream.num_samples * sample_duration,
+                video_metadata["duration"],
+                abs_tol=0.5,
+            ):
+                raise ValueError(
+                    f"expected a {stream.fourcc} stream "
+                    f"lasting {video_metadata['duration']} seconds, "
+                    f"got {stream.num_samples * sample_duration} seconds"
+                )
+            stream.set_timings(sample_duration, start_timestamp)
+
+        # Adjust timings relative to the SHUT stream. GoPro's demo does this,
+        # presumably because SHUT is synchronized with the video stream.
+        shut_start_timestamp = streams["SHUT"].start_timestamp
+        for stream in streams.values():
+            if stream.fourcc == "LOGS":
+                continue
+            stream.start_timestamp -= shut_start_timestamp
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -363,16 +410,24 @@ if __name__ == "__main__":
     print()
     print("Streams:")
     for fourcc, stream in sorted(db.streams.items()):
-        description = f"{stream.description} " if stream.description else ""
         values = stream.values()
-        total_samples = len(values)
+        description = ""
+        if stream.description:
+            description += f"{stream.description} "
+        description += f"[{len(values)} records]"
+        if hasattr(stream, "total_duration"):
+            description += f" [{stream.total_duration:.3f} seconds]"
         print()
-        print(f"{fourcc}: {description}[{total_samples} records]")
+        print(f"{fourcc}: {description}")
         print()
-        print(" ...")
-        for index in range(total_samples // 10, total_samples // 10 + 3):
-            print(f"{index:>4} ", values[index])
-        print(" ...")
-        for index in range(9 * total_samples // 10, 9 * total_samples // 10 + 3):
-            print(f"{index:>4} ", values[index])
-        print(" ...")
+        if len(values) < 10:
+            for index in range(len(values)):
+                print(f"{index:>4} ", values[index])
+        else:
+            print(" ...")
+            for index in range(len(values) // 10, len(values) // 10 + 3):
+                print(f"{index:>4} ", values[index])
+            print(" ...")
+            for index in range(9 * len(values) // 10 - 3, 9 * len(values) // 10):
+                print(f"{index:>4} ", values[index])
+            print(" ...")
