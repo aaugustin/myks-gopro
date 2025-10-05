@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import pathlib
 import struct
+import sys
 import uuid
-from typing import Self, Sequence, cast
+from typing import Self, Sequence, TextIO, cast
 
 import numpy as np
 
@@ -118,6 +120,26 @@ class Record:
 
     def __hash__(self) -> int:
         return hash((self.fourcc, self.type, self.size, self.repeat, self.raw_data))
+
+    def dump(
+        self,
+        show_values: bool = True,
+        indent: int = 0,
+        file: TextIO = sys.stdout,
+    ) -> None:
+        """Dump the record to a file."""
+        print(
+            " " * indent
+            + f"{self.fourcc} type={self.type} size={self.size} repeat={self.repeat}",
+            file=file,
+        )
+        indent += 4
+        if self.type == "":
+            for child in self.children:
+                child.dump(show_values=show_values, indent=indent, file=file)
+        elif show_values:
+            for value in self.values():
+                print(" " * indent + repr(value), file=file)
 
     @classmethod
     def parse(
@@ -331,3 +353,16 @@ def parse_gpmf(raw_gpmf: bytes, offset: int = 0) -> Sequence[Record]:
         records.append(record)
     assert offset == len(raw_gpmf), "read beyond end of GPMF"
     return records
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        sys.stderr.write(f"Usage: {sys.argv[0]} video.gpmf video.txt\n")
+        sys.exit(2)
+
+    gpmf_file = pathlib.Path(sys.argv[1])
+    txt_file = pathlib.Path(sys.argv[2])
+    gpmf = parse_gpmf(gpmf_file.read_bytes())
+    with txt_file.open("w") as handle:
+        for record in gpmf:
+            record.dump(file=handle)
