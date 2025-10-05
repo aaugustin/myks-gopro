@@ -269,12 +269,22 @@ class Database:
         "TMPC",  # device temperature in degrees Celsius
     }
 
+    # These FourCC are ignored for the puproses of grouping.
+    IGNORED_KEYS = {
+        "TIMO",  # time offset of data in seconds; documented as rare
+        "EMPT",  # number of payloads containing no new data
+    }
+
     @classmethod
     def group_strm(cls, records: Sequence[Record]) -> dict[str, Stream]:
         """Group STRM records belonging to the same data stream."""
 
         def group_key(record: Record) -> str:
-            return "".join(sorted(set(child.fourcc for child in record.children)))
+            return "".join(
+                sorted(
+                    set(child.fourcc for child in record.children) - cls.IGNORED_KEYS
+                )
+            )
 
         streams = {}
         for _, group_iter in itertools.groupby(
@@ -284,8 +294,11 @@ class Database:
             group: Sequence[Record] = list(group_iter)
             metadata, group = cls.extract_metadata(group)
 
-            keys = set(child.fourcc for stream in group for child in stream.children)
-            keys -= cls.VARIABLE_KEYS
+            keys = (
+                set(child.fourcc for stream in group for child in stream.children)
+                - cls.IGNORED_KEYS
+                - cls.VARIABLE_KEYS
+            )
             if len(keys) != 1:
                 raise ValueError(f"failed to identify unique FourCC for stream: {keys}")
             fourcc = keys.pop()
