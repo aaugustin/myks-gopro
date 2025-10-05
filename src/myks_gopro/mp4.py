@@ -58,12 +58,8 @@ class MP4File:
         duration = Decimal(stream["duration"])
         nb_frames = int(stream["nb_frames"])
 
-        if nb_frames != frame_rate * time_base * duration_ts:
-            raise ValueError(
-                f"expected {nb_frames} frames, "
-                f"got {frame_rate * time_base * duration_ts}"
-            )
         assert duration == Decimal(float(time_base * duration_ts)).quantize(duration)
+        assert nb_frames == frame_rate * time_base * duration_ts
 
         return {
             "index": int(stream["index"]),
@@ -102,59 +98,6 @@ class MP4File:
             "duration": duration,
             "nb_frames": nb_frames,
         }
-
-    def check_gpmf_packets_sequence(self) -> None:
-        """Check that the sequence of GPMF packets is regular."""
-        video_meta = self.video_metadata
-        gpmd_meta = self.gpmd_metadata
-
-        packets = json.loads(
-            subprocess.check_output(
-                [
-                    "ffprobe",
-                    "-hide_banner",
-                    "-output_format",
-                    "json",
-                    "-select_streams",
-                    str(gpmd_meta["index"]),
-                    "-show_packets",
-                    self.mp4_path,
-                ],
-                stderr=subprocess.DEVNULL,
-            )
-        )["packets"]
-
-        if len(packets) != gpmd_meta["nb_frames"]:
-            raise ValueError(
-                f"expected one packet per frame, "
-                f"got {len(packets)} for {gpmd_meta['nb_frames']} frames"
-            )
-
-        packet = packets[0]
-        ts = int(packet["pts"])
-        duration = int(packet["duration"])
-
-        for index, packet in enumerate(packets[:-1]):  # last packet may be shorter
-            if int(packet["duration"]) != duration:
-                raise ValueError(
-                    f"expected constant packet duration {duration}, "
-                    f"got {int(packet['duration'])} at frame {index}"
-                )
-
-        for index, packet in enumerate(packets):
-            if int(packet["pts"]) != ts:
-                raise ValueError(
-                    f"expected packet timestamps {ts}, "
-                    f"got {int(packet['pts'])} at frame {index}"
-                )
-            ts += duration
-
-        max_duration_delta = 1 / float(video_meta["frame_rate"])
-        if abs(gpmd_meta["duration"] - video_meta["duration"]) > max_duration_delta:
-            raise ValueError(
-                f"expected video and gpmd durations to be almost equal, "
-                f"got {gpmd_meta['duration']} and {video_meta['duration']}"
-            )
 
     def extract_gpmf(self) -> bytes:
         """Extract the GPMF stream."""

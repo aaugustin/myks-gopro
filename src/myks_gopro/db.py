@@ -206,7 +206,6 @@ class Database:
     def from_mp4(cls, mp4_path: str | pathlib.Path) -> Self:
         """Create a database from an MP4 file."""
         mp4_file = MP4File(mp4_path)
-        mp4_file.check_gpmf_packets_sequence()
         video_metadata: Metadata = {
             "width": mp4_file.video_metadata["width"],
             "height": mp4_file.video_metadata["height"],
